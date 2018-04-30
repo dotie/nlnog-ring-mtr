@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+
+import logging
+import logstash
+import json
+import subprocess
+import urllib.request
+import multiprocessing
+
+# Settings
+logstash_server = '127.0.0.1'
+udp_port = 39122
+
+# Logstash
+mtr_logger = logging.getLogger('MTR Logger')
+mtr_logger.setLevel(logging.INFO)
+mtr_logger.addHandler(logstash.LogstashHandler(logstash_server, udp_port, version=1))
+
+# Get Nlnog Ring Active Nodes:
+with urllib.request.urlopen("https://ring.nlnog.net/api/1.0/nodes/active") as url:
+    nlnog = json.loads(url.read().decode())
+
+activenodes = []
+
+for item in nlnog['results']['nodes']:
+    activenodes.append(item['hostname'])
+
+activenodes.sort()
+
+
+def mtr_ring(target, mtr_logger):
+    mtr = subprocess.check_output('mtr -4 -b -j -c 1 ' + target,shell=True).decode('utf-8').strip()
+    data = json.loads(mtr)
+    message = {}
+    for hop in data['report']['hubs']:
+        message.update({str(hop['count']): hop['host']})
+
+    mtr_logger.info(str(data['report']['mtr']['dst']), extra=message)
+
+
+if __name__ == '__main__':
+    p = multiprocessing.Pool(processes = multiprocessing.cpu_count()-1)
+    for target in activenodes:
+        p.apply_async(mtr_ring, (target, mtr_logger))
+
+    p.close()
+    p.join()
+    print("Complete")
